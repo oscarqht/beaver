@@ -39,6 +39,8 @@ function getFolderName(filePath: string): string {
 export function TaskPageClient({ taskId }: TaskPageClientProps) {
   const router = useRouter();
   const clientIdRef = useRef<string>('');
+  const allowPageExitRef = useRef(false);
+  const cleanupStartedRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const terminalFrameRefs = useRef<Record<string, HTMLIFrameElement | null>>({});
   const [task, setTask] = useState<TaskRecord | null>(null);
@@ -84,6 +86,24 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
     },
     [taskId],
   );
+
+  const runCleanupOnce = useCallback(
+    async (keepalive = false) => {
+      if (cleanupStartedRef.current) {
+        return;
+      }
+
+      cleanupStartedRef.current = true;
+      window.sessionStorage.removeItem(getTaskClientStorageKey(taskId));
+      await runCleanup(keepalive);
+    },
+    [runCleanup, taskId],
+  );
+
+  useEffect(() => {
+    allowPageExitRef.current = false;
+    cleanupStartedRef.current = false;
+  }, [taskId]);
 
   useEffect(() => {
     const storageKey = getTaskClientStorageKey(taskId);
@@ -154,6 +174,51 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
 
     return () => window.clearInterval(intervalId);
   }, [task]);
+
+  useEffect(() => {
+    if (!task || loading) {
+      return;
+    }
+
+    const guardState = { __beaverTaskExitGuard: taskId };
+    window.history.pushState(guardState, '', window.location.href);
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (allowPageExitRef.current) {
+        return;
+      }
+
+      event.preventDefault();
+      event.returnValue = '';
+    };
+
+    const handlePopState = () => {
+      if (allowPageExitRef.current) {
+        return;
+      }
+
+      const shouldLeave = window.confirm(
+        'Leave this task page? Your task terminals will be disconnected.',
+      );
+      if (!shouldLeave) {
+        window.history.pushState(guardState, '', window.location.href);
+        return;
+      }
+
+      allowPageExitRef.current = true;
+      void runCleanupOnce(false).finally(() => {
+        window.history.back();
+      });
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('popstate', handlePopState);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [loading, runCleanupOnce, task, taskId]);
 
   async function handleAddTerminal() {
     setAddingTerminal(true);
@@ -322,8 +387,8 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
   }
 
   async function handleLeaveNow() {
-    await runCleanup(false);
-    window.sessionStorage.removeItem(getTaskClientStorageKey(taskId));
+    allowPageExitRef.current = true;
+    await runCleanupOnce(false);
     router.push('/');
   }
 
