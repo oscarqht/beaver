@@ -1,0 +1,23 @@
+{
+  "name": "bever",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "tsx --test tests/**/*.test.ts"
+  },
+  "dependencies": {
+    "@types/node": "^20.19.39",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "next": "^16.2.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
+  }
+}
