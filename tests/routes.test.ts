@@ -7,8 +7,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { NextRequest } from 'next/server';
 import { GET as getBranches } from '../app/api/git/branches/route';
-import { POST as createTask } from '../app/api/tasks/route';
-import { GET as getTask } from '../app/api/tasks/[id]/route';
+import { DELETE as deleteAllTasks, GET as listTasks, POST as createTask } from '../app/api/tasks/route';
+import { DELETE as deleteTask, GET as getTask } from '../app/api/tasks/[id]/route';
 
 const execFileAsync = promisify(execFile);
 
@@ -59,4 +59,77 @@ test('task routes create and expose pending task metadata', async () => {
   assert.equal(detailsResponse.status, 200);
   assert.equal(detailsPayload.task.status, 'pending');
   assert.equal(detailsPayload.task.selectedBranch, 'main');
+});
+
+test('task routes list and delete individual tasks', async () => {
+  const repoPath = await createRepo();
+  process.env.BEVER_HOME_DIR = await fs.mkdtemp(path.join(os.tmpdir(), 'bever-routes-list-home-'));
+
+  const createResponse = await createTask(
+    new Request('http://localhost/api/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sourcePath: repoPath,
+        mode: 'local',
+        provider: 'codex',
+        model: 'gpt-5.4',
+        reasoningEffort: 'low',
+        selectedBranch: 'main',
+      }),
+    }),
+  );
+  const createPayload = await createResponse.json();
+  assert.equal(createResponse.status, 200);
+
+  const listResponse = await listTasks(new Request('http://localhost/api/tasks'));
+  const listPayload = await listResponse.json();
+  assert.equal(listResponse.status, 200);
+  assert.equal(listPayload.tasks.length, 1);
+  assert.equal(listPayload.tasks[0].id, createPayload.taskId);
+
+  const deleteResponse = await deleteTask(new Request('http://localhost/api/tasks/id', { method: 'DELETE' }), {
+    params: Promise.resolve({ id: createPayload.taskId }),
+  });
+  const deletePayload = await deleteResponse.json();
+  assert.equal(deleteResponse.status, 200);
+  assert.equal(deletePayload.deletedTaskId, createPayload.taskId);
+
+  const missingResponse = await getTask(new Request('http://localhost/api/tasks/id'), {
+    params: Promise.resolve({ id: createPayload.taskId }),
+  });
+  assert.equal(missingResponse.status, 404);
+});
+
+test('task routes delete all pending tasks', async () => {
+  const repoPath = await createRepo();
+  process.env.BEVER_HOME_DIR = await fs.mkdtemp(path.join(os.tmpdir(), 'bever-routes-delete-all-home-'));
+
+  for (let index = 0; index < 2; index += 1) {
+    const response = await createTask(
+      new Request('http://localhost/api/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourcePath: repoPath,
+          mode: 'local',
+          provider: 'codex',
+          model: 'gpt-5.4',
+          reasoningEffort: 'low',
+          selectedBranch: 'main',
+        }),
+      }),
+    );
+    assert.equal(response.status, 200);
+  }
+
+  const deleteResponse = await deleteAllTasks(new Request('http://localhost/api/tasks', { method: 'DELETE' }));
+  const deletePayload = await deleteResponse.json();
+  assert.equal(deleteResponse.status, 200);
+  assert.equal(deletePayload.deletedTaskIds.length, 2);
+
+  const listResponse = await listTasks(new Request('http://localhost/api/tasks'));
+  const listPayload = await listResponse.json();
+  assert.equal(listResponse.status, 200);
+  assert.deepEqual(listPayload.tasks, []);
 });

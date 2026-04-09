@@ -1,9 +1,21 @@
 import { NextResponse } from 'next/server';
-import { createTask, sweepStaleTasks } from '../../../lib/task-service';
+import { createTask, deleteAllTasks, listTasks, sweepStaleTasks } from '../../../lib/task-service';
 import { readJsonBody } from '../../../lib/request';
 import type { ProviderId, ReasoningEffort, TaskMode } from '../../../lib/types';
 
 export const runtime = 'nodejs';
+
+export async function GET() {
+  try {
+    const tasks = await listTasks();
+    return NextResponse.json({ tasks });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : String(error) },
+      { status: 500 },
+    );
+  }
+}
 
 export async function POST(request: Request) {
   await sweepStaleTasks();
@@ -32,6 +44,18 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : String(error) },
       { status: 400 },
+    );
+  }
+}
+
+export async function DELETE() {
+  try {
+    const deletedTaskIds = await deleteAllTasks();
+    return NextResponse.json({ deletedTaskIds });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : String(error) },
+      { status: 500 },
     );
   }
 }

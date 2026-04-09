@@ -96,6 +96,11 @@ export async function getTask(taskId: string): Promise<TaskRecord | null> {
   return state.tasks[taskId] ?? null;
 }
 
+export async function listTasks(): Promise<TaskRecord[]> {
+  const state = await readState();
+  return Object.values(state.tasks).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
 export async function getTaskTerminals(taskId: string): Promise<TerminalRecord[]> {
   const state = await readState();
   return Object.values(state.terminals)

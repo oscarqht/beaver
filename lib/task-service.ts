@@ -5,6 +5,7 @@ import {
   deleteTaskAndTerminals,
   deleteTerminal,
   getTask,
+  listTasks as listStoredTasks,
   getTaskTerminals,
   rememberRecentRepoPath,
   readState,
@@ -134,6 +135,11 @@ export async function getTaskDetails(taskId: string) {
       stale: isTaskStale(task),
     },
   };
+}
+
+export async function listTasks() {
+  await sweepStaleTasks();
+  return listStoredTasks();
 }
 
 export async function sweepStaleTasks(): Promise<void> {
@@ -266,6 +272,36 @@ export async function removeTerminal(taskId: string, terminalId: string, clientI
   await deleteTerminal(terminal.id);
 }
 
+export async function renameTerminal(
+  taskId: string,
+  terminalId: string,
+  clientId: string,
+  title: string,
+) {
+  const normalizedTitle = title.trim();
+  if (!normalizedTitle) {
+    throw new Error('Terminal title is required.');
+  }
+  if (normalizedTitle.length > 80) {
+    throw new Error('Terminal title must be 80 characters or fewer.');
+  }
+
+  const task = await getTask(taskId);
+  if (!task) throw new Error('Task not found.');
+  assertOwner(task, clientId);
+
+  const terminals = await getTaskTerminals(taskId);
+  const terminal = terminals.find((entry) => entry.id === terminalId);
+  if (!terminal) throw new Error('Terminal not found.');
+
+  const nextTerminal = {
+    ...terminal,
+    title: normalizedTitle,
+  };
+  await saveTerminal(nextTerminal);
+  return serializeTerminal(nextTerminal);
+}
+
 export async function refreshHeartbeat(taskId: string, clientId: string) {
   await sweepStaleTasks();
   const task = await getTask(taskId);
@@ -309,4 +345,18 @@ export async function cleanupTask(
   }
 
   await deleteTaskAndTerminals(taskId);
+}
+
+export async function deleteTask(taskId: string): Promise<void> {
+  await cleanupTask(taskId, { ignoreOwner: true });
+}
+
+export async function deleteAllTasks(): Promise<string[]> {
+  const tasks = await listStoredTasks();
+
+  for (const task of tasks) {
+    await cleanupTask(task.id, { ignoreOwner: true });
+  }
+
+  return tasks.map((task) => task.id);
 }

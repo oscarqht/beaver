@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Alert, Button, ButtonGroup, Card, Label, ListBox, Select, Separator, Spinner, Tabs } from '@heroui/react';
 import { CodeFork, FolderArrowRight, Play, Terminal } from '@gravity-ui/icons';
 import type { BranchOption, ProviderId, ReasoningEffort, TaskMode } from '../lib/types';
+import { getMostRecentRepoPath } from '../lib/recent-repos';
 
 const REPO_PREFERENCES_STORAGE_KEY = 'beaver:repo-preferences';
 
@@ -34,6 +35,7 @@ type AutoTheme = 'light' | 'dark';
 
 export function HomePageClient({ providers, recentRepoPaths: initialRecentRepoPaths }: HomePageClientProps) {
   const router = useRouter();
+  const hasInitializedRepoSelection = useRef(false);
   const [theme, setTheme] = useState<AutoTheme>('light');
   const [isCompactViewport, setIsCompactViewport] = useState(false);
   const [repoPath, setRepoPath] = useState('');
@@ -249,6 +251,22 @@ export function HomePageClient({ providers, recentRepoPaths: initialRecentRepoPa
     });
   }, [availableReasoning.length, modelId, mode, providerId, reasoningEffort, repoPath, selectedBranch]);
 
+  useEffect(() => {
+    if (hasInitializedRepoSelection.current) {
+      return;
+    }
+    hasInitializedRepoSelection.current = true;
+
+    const lastSelectedRepoPath = getMostRecentRepoPath(initialRecentRepoPaths);
+    if (!lastSelectedRepoPath) {
+      return;
+    }
+
+    setRepoPath(lastSelectedRepoPath);
+    applyRepoPreferences(lastSelectedRepoPath);
+    void loadBranches(lastSelectedRepoPath);
+  }, [initialRecentRepoPaths]);
+
   async function loadBranches(pathOverride?: string) {
     const nextRepoPath = pathOverride?.trim() || repoPath.trim();
     if (!nextRepoPath) return;
@@ -458,7 +476,7 @@ export function HomePageClient({ providers, recentRepoPaths: initialRecentRepoPa
     >
       <div className="home-frame mx-auto w-full max-w-5xl">
         <Card className="home-card home-root-card border border-default-200/70 backdrop-blur-xl" variant="default">
-          <Card.Header className="home-header flex flex-col items-start gap-4 px-6 pb-2 pt-6 sm:px-8">
+          <Card.Header className="home-header flex flex-col items-start gap-4 px-6 pb-2 pt-6 sm:flex-row sm:items-start sm:justify-between sm:px-8">
             <div className="home-hero flex flex-col gap-3">
               <h1 className="home-title text-4xl font-semibold tracking-tight text-foreground sm:text-6xl">
                 🦫 Beaver
@@ -468,6 +486,9 @@ export function HomePageClient({ providers, recentRepoPaths: initialRecentRepoPa
                 and let the browser tab own the task lifecycle.
               </p>
             </div>
+            <Button variant="ghost" onPress={() => router.push('/tasks')}>
+              View tasks
+            </Button>
           </Card.Header>
 
           <Separator />

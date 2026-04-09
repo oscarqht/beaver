@@ -36,6 +36,9 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
   const [task, setTask] = useState<TaskRecord | null>(null);
   const [terminals, setTerminals] = useState<TerminalView[]>([]);
   const [activeTerminalId, setActiveTerminalId] = useState<string>('');
+  const [editingTerminalId, setEditingTerminalId] = useState<string | null>(null);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [renamingTerminalId, setRenamingTerminalId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [addingTerminal, setAddingTerminal] = useState(false);
   const [cleanupState, setCleanupState] = useState('Waiting for bootstrap...');
@@ -84,7 +87,7 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
     const bootstrap = async () => {
       setLoading(true);
       setError(null);
-      setCleanupState('Claiming task ownership and starting terminals...');
+      setCleanupState('Claiming task ownership and reconnecting terminals...');
 
       try {
         const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/bootstrap`, {
@@ -107,7 +110,7 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
         setTask(payload.task);
         setTerminals(payload.terminals);
         setActiveTerminalId(payload.terminals[0]?.id ?? '');
-        setCleanupState('Task is active. The browser tab owns terminal cleanup.');
+        setCleanupState('Task is active. Use End task to stop it. Abandoned tasks are cleaned up after timeout.');
       } catch (bootstrapError) {
         if (cancelled) return;
         setError(bootstrapError instanceof Error ? bootstrapError.message : 'Failed to bootstrap task.');
@@ -120,17 +123,10 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
     };
 
     void bootstrap();
-
-    const handlePageHide = () => {
-      void runCleanup(true);
-    };
-
-    window.addEventListener('pagehide', handlePageHide);
     return () => {
       cancelled = true;
-      window.removeEventListener('pagehide', handlePageHide);
     };
-  }, [runCleanup, taskId]);
+  }, [taskId]);
 
   useEffect(() => {
     if (!task) return;
@@ -203,6 +199,67 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
     }
   }
 
+  function startTerminalRename(terminal: TerminalView) {
+    setActiveTerminalId(terminal.id);
+    setEditingTerminalId(terminal.id);
+    setTitleDraft(terminal.title);
+    setError(null);
+  }
+
+  function cancelTerminalRename() {
+    setEditingTerminalId(null);
+    setTitleDraft('');
+    setRenamingTerminalId(null);
+  }
+
+  async function commitTerminalRename(terminalId: string) {
+    const terminal = terminals.find((entry) => entry.id === terminalId);
+    if (!terminal || renamingTerminalId) {
+      return;
+    }
+
+    const normalizedTitle = titleDraft.trim();
+    if (!normalizedTitle) {
+      setError('Terminal title is required.');
+      return;
+    }
+    if (normalizedTitle === terminal.title) {
+      cancelTerminalRename();
+      return;
+    }
+
+    setRenamingTerminalId(terminalId);
+    setError(null);
+    try {
+      const response = await fetch(
+        `/api/tasks/${encodeURIComponent(taskId)}/terminals/${encodeURIComponent(terminalId)}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            clientId: clientIdRef.current,
+            title: normalizedTitle,
+          }),
+        },
+      );
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || 'Failed to rename terminal.');
+      }
+
+      const nextTerminal = payload.terminal as TerminalView;
+      setTerminals((current) =>
+        current.map((entry) => (entry.id === nextTerminal.id ? nextTerminal : entry)),
+      );
+      cancelTerminalRename();
+    } catch (renameError) {
+      setError(renameError instanceof Error ? renameError.message : 'Failed to rename terminal.');
+      setRenamingTerminalId(null);
+    }
+  }
+
   async function handleLeaveNow() {
     await runCleanup(false);
     window.sessionStorage.removeItem(getTaskClientStorageKey(taskId));
@@ -213,6 +270,17 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
     <main className="h-screen overflow-hidden bg-[#0b0f14] text-[#e5e7eb]">
       <div className="flex h-full flex-col">
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          {error ? (
+            <div className="shrink-0 border-b border-white/10 bg-[#0f172a] px-2 py-2">
+              <Alert status="danger">
+                <Alert.Content>
+                  <Alert.Title>Task error</Alert.Title>
+                  <Alert.Description>{error}</Alert.Description>
+                </Alert.Content>
+              </Alert>
+            </div>
+          ) : null}
+
           {loading ? (
             <div className="grid flex-1 place-items-center px-6 py-12 text-sm text-[#94a3b8]">
               <div className="flex items-center gap-3">
@@ -243,7 +311,43 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
                         >
                           {index > 0 ? <Tabs.Separator /> : null}
                           <span className="flex items-center gap-2">
-                            <span>{terminal.title}</span>
+                            {editingTerminalId === terminal.id ? (
+                              <input
+                                value={titleDraft}
+                                autoFocus
+                                maxLength={80}
+                                aria-label="Edit terminal title"
+                                className="h-6 w-36 rounded border border-[#3b82f6] bg-[#0f172a] px-2 text-xs text-white outline-none"
+                                onChange={(event) => setTitleDraft(event.target.value)}
+                                onClick={(event) => event.stopPropagation()}
+                                onDoubleClick={(event) => event.stopPropagation()}
+                                onFocus={(event) => event.currentTarget.select()}
+                                onBlur={() => void commitTerminalRename(terminal.id)}
+                                onKeyDown={(event) => {
+                                  event.stopPropagation();
+                                  if (event.key === 'Enter') {
+                                    event.preventDefault();
+                                    void commitTerminalRename(terminal.id);
+                                  } else if (event.key === 'Escape') {
+                                    event.preventDefault();
+                                    cancelTerminalRename();
+                                  }
+                                }}
+                                onKeyUp={(event) => event.stopPropagation()}
+                                disabled={renamingTerminalId === terminal.id}
+                              />
+                            ) : (
+                              <span
+                                className="cursor-text whitespace-pre"
+                                onDoubleClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  startTerminalRename(terminal);
+                                }}
+                              >
+                                {terminal.title}
+                              </span>
+                            )}
                             {terminal.closable ? (
                               <button
                                 type="button"
@@ -275,17 +379,6 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
                   </div>
                 </Tabs.ListContainer>
               </Tabs>
-
-              {error ? (
-                <div className="border-b border-white/10 bg-[#0f172a] px-2 py-2">
-                  <Alert status="danger">
-                    <Alert.Content>
-                      <Alert.Title>Task error</Alert.Title>
-                      <Alert.Description>{error}</Alert.Description>
-                    </Alert.Content>
-                  </Alert>
-                </div>
-              ) : null}
 
               <div className="relative h-0 min-h-0 flex-1 overflow-hidden bg-[#0b0f14]">
                 {terminals.map((terminal) => (
