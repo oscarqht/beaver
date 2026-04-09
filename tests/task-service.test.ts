@@ -4,9 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import {
+  bootstrapTask,
   deleteAllTasks,
   deleteTask,
   listTasks,
+  releaseTaskOwnership,
   renameTerminal,
   splitMainTerminalDuplicates,
   sweepStaleTasks,
@@ -208,4 +210,82 @@ test('sweepStaleTasks releases stale ownership without deleting the task', async
   assert.equal(state.tasks[task.id]?.id, task.id);
   assert.equal(state.tasks[task.id]?.ownerClientId, null);
   assert.equal(state.tasks[task.id]?.lastHeartbeatAt, null);
+});
+
+test('bootstrapTask allows the same task to be opened from multiple pages', async () => {
+  const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'bever-bootstrap-multi-page-'));
+  process.env.BEVER_HOME_DIR = tempHome;
+
+  const activeHeartbeat = new Date().toISOString();
+  const task: TaskRecord = {
+    id: 'task-multi-page',
+    sourcePath: '/tmp/repo-multi-page',
+    workspacePath: '/tmp/repo-multi-page',
+    mode: 'local',
+    provider: 'codex',
+    model: 'gpt-5.4',
+    reasoningEffort: 'low',
+    selectedBranch: 'main',
+    worktreeBranch: null,
+    status: 'active',
+    ownerClientId: 'client-a',
+    lastHeartbeatAt: activeHeartbeat,
+    ownerHeartbeats: {
+      'client-a': activeHeartbeat,
+    },
+    createdAt: new Date().toISOString(),
+  };
+
+  const terminal: TerminalRecord = {
+    id: 'term-main',
+    taskId: task.id,
+    role: 'main',
+    title: 'Codex CLI main',
+    tmuxSessionName: 'task-multi-page-main',
+    closable: false,
+    createdAt: new Date().toISOString(),
+  };
+
+  await saveTask(task);
+  await saveTerminal(terminal);
+
+  const payload = await bootstrapTask(task.id, 'client-b');
+  const state = await readState();
+
+  assert.equal(payload.terminals.length, 1);
+  assert.deepEqual(Object.keys(payload.task.ownerHeartbeats ?? {}).sort(), ['client-a', 'client-b']);
+  assert.deepEqual(Object.keys(state.tasks[task.id]?.ownerHeartbeats ?? {}).sort(), ['client-a', 'client-b']);
+});
+
+test('releaseTaskOwnership removes only the current page lease', async () => {
+  const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'bever-release-ownership-'));
+  process.env.BEVER_HOME_DIR = tempHome;
+
+  const now = new Date().toISOString();
+  const task: TaskRecord = {
+    id: 'task-release',
+    sourcePath: '/tmp/repo-release',
+    workspacePath: '/tmp/repo-release',
+    mode: 'local',
+    provider: 'codex',
+    model: 'gpt-5.4',
+    reasoningEffort: 'low',
+    selectedBranch: 'main',
+    worktreeBranch: null,
+    status: 'active',
+    ownerClientId: 'client-b',
+    lastHeartbeatAt: now,
+    ownerHeartbeats: {
+      'client-a': now,
+      'client-b': now,
+    },
+    createdAt: now,
+  };
+
+  await saveTask(task);
+  await releaseTaskOwnership(task.id, 'client-a');
+
+  const state = await readState();
+  assert.equal(state.tasks[task.id]?.id, task.id);
+  assert.deepEqual(Object.keys(state.tasks[task.id]?.ownerHeartbeats ?? {}), ['client-b']);
 });

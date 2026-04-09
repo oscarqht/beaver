@@ -34,6 +34,7 @@ export type TaskRecord = {
   status: TaskStatus;
   ownerClientId: string | null;
   lastHeartbeatAt: string | null;
+  ownerHeartbeats?: Record<string, string>;
   createdAt: string;
 };
 

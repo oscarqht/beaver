@@ -38,6 +38,41 @@ type CreateTaskInput = {
   selectedBranch: string;
 };
 
+function isHeartbeatExpired(timestamp: string, now = Date.now()): boolean {
+  const value = new Date(timestamp).getTime();
+  if (Number.isNaN(value)) {
+    return true;
+  }
+  return now - value > HEARTBEAT_TIMEOUT_MS;
+}
+
+function getOwnerHeartbeats(task: TaskRecord): Record<string, string> {
+  const ownerHeartbeats = { ...(task.ownerHeartbeats ?? {}) };
+  if (!task.ownerHeartbeats && task.ownerClientId && task.lastHeartbeatAt && !ownerHeartbeats[task.ownerClientId]) {
+    ownerHeartbeats[task.ownerClientId] = task.lastHeartbeatAt;
+  }
+  return ownerHeartbeats;
+}
+
+function syncTaskOwnership(task: TaskRecord, ownerHeartbeats = getOwnerHeartbeats(task)): TaskRecord {
+  const activeEntries = Object.entries(ownerHeartbeats)
+    .filter(([, timestamp]) => !isHeartbeatExpired(timestamp))
+    .sort((left, right) => new Date(right[1]).getTime() - new Date(left[1]).getTime());
+  const activeHeartbeats = Object.fromEntries(activeEntries);
+  const [latestOwnerClientId, latestHeartbeatAt] = activeEntries[0] ?? [null, null];
+
+  return {
+    ...task,
+    ownerClientId: latestOwnerClientId,
+    lastHeartbeatAt: latestHeartbeatAt,
+    ownerHeartbeats: activeHeartbeats,
+  };
+}
+
+function hasKnownOwner(task: TaskRecord, clientId: string): boolean {
+  return Boolean(getOwnerHeartbeats(task)[clientId]);
+}
+
 export function serializeTerminal(terminal: TerminalRecord) {
   return {
     ...terminal,
@@ -83,8 +118,9 @@ async function runBootstrapExclusive<T>(taskId: string, operation: () => Promise
 }
 
 function isTaskStale(task: TaskRecord): boolean {
-  if (!task.ownerClientId || !task.lastHeartbeatAt) return false;
-  return Date.now() - new Date(task.lastHeartbeatAt).getTime() > HEARTBEAT_TIMEOUT_MS;
+  const ownerHeartbeats = getOwnerHeartbeats(task);
+  if (Object.keys(ownerHeartbeats).length === 0) return false;
+  return Object.values(ownerHeartbeats).every((timestamp) => isHeartbeatExpired(timestamp));
 }
 
 export async function createTask(input: CreateTaskInput): Promise<TaskRecord> {
@@ -116,6 +152,7 @@ export async function createTask(input: CreateTaskInput): Promise<TaskRecord> {
     status: 'pending',
     ownerClientId: null,
     lastHeartbeatAt: null,
+    ownerHeartbeats: {},
     createdAt: new Date().toISOString(),
   };
 
@@ -124,8 +161,9 @@ export async function createTask(input: CreateTaskInput): Promise<TaskRecord> {
 }
 
 export async function getTaskDetails(taskId: string) {
-  const task = await getTask(taskId);
-  if (!task) return null;
+  const storedTask = await getTask(taskId);
+  if (!storedTask) return null;
+  const task = syncTaskOwnership(storedTask);
   const terminals = await getTaskTerminals(taskId);
   const stale = isTaskStale(task);
   return {
@@ -140,28 +178,31 @@ export async function getTaskDetails(taskId: string) {
 
 export async function listTasks() {
   await sweepStaleTasks();
-  return listStoredTasks();
+  const tasks = await listStoredTasks();
+  return tasks.map((task) => syncTaskOwnership(task));
 }
 
 export async function sweepStaleTasks(): Promise<void> {
   await updateState((state) => {
     for (const task of Object.values(state.tasks)) {
-      if (!isTaskStale(task)) {
-        continue;
-      }
-
-      task.ownerClientId = null;
-      task.lastHeartbeatAt = null;
+      const normalizedTask = syncTaskOwnership(task);
+      task.ownerClientId = normalizedTask.ownerClientId;
+      task.lastHeartbeatAt = normalizedTask.lastHeartbeatAt;
+      task.ownerHeartbeats = normalizedTask.ownerHeartbeats;
     }
   });
 }
 
 function assertOwner(task: TaskRecord, clientId: string, allowStale = false): void {
-  if (!task.ownerClientId) {
+  const activeOwners = syncTaskOwnership(task).ownerHeartbeats ?? {};
+  const knownOwners = getOwnerHeartbeats(task);
+
+  if (Object.keys(knownOwners).length === 0) {
     throw new Error('Task is not claimed yet.');
   }
-  if (task.ownerClientId === clientId) return;
-  if (allowStale && isTaskStale(task)) return;
+
+  if (activeOwners[clientId]) return;
+  if (allowStale && knownOwners[clientId]) return;
   throw new Error('Task is already open in another browser tab.');
 }
 
@@ -169,14 +210,11 @@ export async function bootstrapTask(taskId: string, clientId: string) {
   return runBootstrapExclusive(taskId, async () => {
     await sweepStaleTasks();
 
-    const task = await getTask(taskId);
-    if (!task) {
+    const storedTask = await getTask(taskId);
+    if (!storedTask) {
       throw new Error('Task not found.');
     }
-
-    if (task.ownerClientId && task.ownerClientId !== clientId && !isTaskStale(task)) {
-      throw new Error('Task is already owned by another browser tab.');
-    }
+    const task = syncTaskOwnership(storedTask);
 
     let nextTask = task;
     let nextTerminals = await getTaskTerminals(taskId);
@@ -211,12 +249,15 @@ export async function bootstrapTask(taskId: string, clientId: string) {
       }
     }
 
-    nextTask = {
+    const claimedAt = new Date().toISOString();
+    nextTask = syncTaskOwnership({
       ...nextTask,
-      ownerClientId: clientId,
-      lastHeartbeatAt: new Date().toISOString(),
       status: 'active',
-    };
+      ownerHeartbeats: {
+        ...getOwnerHeartbeats(nextTask),
+        [clientId]: claimedAt,
+      },
+    });
     await saveTask(nextTask);
 
     if (!primaryMainTerminal) {
@@ -245,8 +286,9 @@ export async function bootstrapTask(taskId: string, clientId: string) {
 }
 
 export async function createExtraTerminal(taskId: string, clientId: string) {
-  const task = await getTask(taskId);
-  if (!task) throw new Error('Task not found.');
+  const storedTask = await getTask(taskId);
+  if (!storedTask) throw new Error('Task not found.');
+  const task = syncTaskOwnership(storedTask);
   assertOwner(task, clientId);
   const terminal = await createTerminalSession({
     task,
@@ -259,8 +301,9 @@ export async function createExtraTerminal(taskId: string, clientId: string) {
 }
 
 export async function removeTerminal(taskId: string, terminalId: string, clientId: string) {
-  const task = await getTask(taskId);
-  if (!task) throw new Error('Task not found.');
+  const storedTask = await getTask(taskId);
+  if (!storedTask) throw new Error('Task not found.');
+  const task = syncTaskOwnership(storedTask);
   assertOwner(task, clientId);
 
   const terminals = await getTaskTerminals(taskId);
@@ -288,8 +331,9 @@ export async function renameTerminal(
     throw new Error('Terminal title must be 80 characters or fewer.');
   }
 
-  const task = await getTask(taskId);
-  if (!task) throw new Error('Task not found.');
+  const storedTask = await getTask(taskId);
+  if (!storedTask) throw new Error('Task not found.');
+  const task = syncTaskOwnership(storedTask);
   assertOwner(task, clientId);
 
   const terminals = await getTaskTerminals(taskId);
@@ -305,14 +349,36 @@ export async function renameTerminal(
 }
 
 export async function refreshHeartbeat(taskId: string, clientId: string) {
-  const task = await getTask(taskId);
-  if (!task) throw new Error('Task not found.');
+  const storedTask = await getTask(taskId);
+  if (!storedTask) throw new Error('Task not found.');
+  const task = syncTaskOwnership(storedTask);
   assertOwner(task, clientId, true);
-  const nextTask = {
+  const nextTask = syncTaskOwnership({
     ...task,
-    ownerClientId: clientId,
-    lastHeartbeatAt: new Date().toISOString(),
-  };
+    ownerHeartbeats: {
+      ...getOwnerHeartbeats(task),
+      [clientId]: new Date().toISOString(),
+    },
+  });
+  await saveTask(nextTask);
+  return nextTask;
+}
+
+export async function releaseTaskOwnership(taskId: string, clientId: string): Promise<TaskRecord | null> {
+  const storedTask = await getTask(taskId);
+  if (!storedTask) return null;
+  const task = syncTaskOwnership(storedTask);
+  if (!hasKnownOwner(task, clientId)) {
+    return task;
+  }
+
+  const ownerHeartbeats = getOwnerHeartbeats(task);
+  delete ownerHeartbeats[clientId];
+
+  const nextTask = syncTaskOwnership({
+    ...task,
+    ownerHeartbeats,
+  });
   await saveTask(nextTask);
   return nextTask;
 }
@@ -321,8 +387,9 @@ export async function cleanupTask(
   taskId: string,
   input: { clientId?: string; ignoreOwner?: boolean } = {},
 ): Promise<void> {
-  const task = await getTask(taskId);
-  if (!task) return;
+  const storedTask = await getTask(taskId);
+  if (!storedTask) return;
+  const task = syncTaskOwnership(storedTask);
   if (!input.ignoreOwner) {
     if (!input.clientId) {
       throw new Error('clientId is required.');

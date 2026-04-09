@@ -106,9 +106,9 @@ Use this when you want task isolation and easy cleanup.
 
 ## Runtime Behavior
 
-- Each task is claimed by a single browser tab while that tab keeps heartbeating.
+- Each task can stay open in multiple browser tabs at the same time while those tabs keep heartbeating.
 - The task page sends a heartbeat every 15 seconds.
-- If a task stops heartbeating for 30 seconds, Beaver only releases browser ownership so the running task can be reconnected later.
+- If a task page stops heartbeating for 30 seconds, Beaver releases that page's browser ownership so the running task can be reconnected later.
 - The main terminal tab cannot be closed.
 - Extra shell tabs can be created, renamed, and closed.
 
@@ -163,6 +163,7 @@ The local UI is backed by Next.js route handlers under [`app/api`](/Users/tangqh
 - `DELETE /api/tasks/:id`: delete a task
 - `POST /api/tasks/:id/bootstrap`: claim and start a task
 - `POST /api/tasks/:id/heartbeat`: refresh task ownership
+- `POST /api/tasks/:id/release`: release one page's task ownership without ending the task
 - `POST /api/tasks/:id/cleanup`: end a task
 - `POST /api/tasks/:id/terminals`: open an extra shell tab
 - `PATCH /api/tasks/:id/terminals/:terminalId`: rename a terminal
