@@ -17,12 +17,14 @@ test('patches ttyd html to hide xterm viewport overflow', () => {
   const html = '<html><head><style>.xterm .xterm-viewport{overflow-y:scroll}</style></head><body></body></html>';
   const patched = patchTtydIndexHtml(html);
 
-  assert.match(patched, /beaver-ttyd-patch-v2/);
+  assert.match(patched, /beaver-ttyd-patch-v3/);
   assert.match(
     patched,
     /\.xterm \.xterm-viewport\{overflow:hidden!important;overflow-y:hidden!important;scrollbar-width:none!important;\}/,
   );
   assert.match(patched, /\.xterm \.xterm-viewport::-webkit-scrollbar\{display:none!important;width:0!important;height:0!important;\}/);
   assert.match(patched, /document\.querySelectorAll\('\.xterm-viewport'\)/);
+  assert.match(patched, /beaver:insert-text/);
+  assert.match(patched, /setRangeText/);
   assert.match(patched, /window\.setInterval\(apply,250\)/);
 });

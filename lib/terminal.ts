@@ -7,7 +7,7 @@ import type { TaskRecord, TerminalRecord, TerminalRole } from './types';
 
 const TTYD_PORT = 7681;
 const TTYD_INDEX_CACHE_PATH = path.join(os.homedir(), '.beaver', 'ttyd', 'index.html');
-const TTYD_PATCH_MARKER = 'beaver-ttyd-patch-v2';
+const TTYD_PATCH_MARKER = 'beaver-ttyd-patch-v3';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -61,7 +61,25 @@ export function patchTtydIndexHtml(html: string): string {
     "document.documentElement.style.overflow='hidden';",
     "document.body.style.overflow='hidden';",
     '};',
+    'const insertText=(text)=>{',
+    "const input=document.querySelector('textarea, input');",
+    'if(!(input instanceof HTMLTextAreaElement || input instanceof HTMLInputElement)){return;}',
+    'input.focus();',
+    'const start=input.selectionStart ?? input.value.length;',
+    'const end=input.selectionEnd ?? input.value.length;',
+    "input.setRangeText(text,start,end,'end');",
+    'try{',
+    "input.dispatchEvent(new InputEvent('input',{bubbles:true,data:text,inputType:'insertText'}));",
+    '}catch{',
+    "input.dispatchEvent(new Event('input',{bubbles:true}));",
+    '}',
+    '};',
     "window.addEventListener('load',apply);",
+    "window.addEventListener('message',(event)=>{",
+    'const data=event.data;',
+    "if(!data||data.type!=='beaver:insert-text'||typeof data.text!=='string'){return;}",
+    'insertText(data.text);',
+    '});',
     'new MutationObserver(apply).observe(document.documentElement,{childList:true,subtree:true});',
     'window.setInterval(apply,250);',
     '})();',

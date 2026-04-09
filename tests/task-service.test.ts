@@ -11,6 +11,7 @@ import {
   splitMainTerminalDuplicates,
   sweepStaleTasks,
 } from '../lib/task-service';
+import { formatPathsForTerminalInput } from '../lib/shell-path-format';
 import { readState, saveTask, saveTerminal } from '../lib/store';
 import type { TaskRecord, TerminalRecord } from '../lib/types';
 
@@ -96,6 +97,11 @@ test('renameTerminal trims leading and trailing spacing before persisting the ti
 
   assert.equal(renamed.title, 'New title');
   assert.equal(state.terminals[terminal.id]?.title, 'New title');
+});
+
+test('formatPathsForTerminalInput shell-quotes each selected path', () => {
+  const formatted = formatPathsForTerminalInput(['/tmp/alpha.txt', "/tmp/O'Reilly notes.md"]);
+  assert.equal(formatted, "'/tmp/alpha.txt' '/tmp/O'\\''Reilly notes.md'");
 });
 
 test('listTasks sorts newest first and deleteTask removes a pending task', async () => {

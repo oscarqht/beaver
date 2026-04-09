@@ -53,6 +53,14 @@ body {
   box-sizing: border-box;
 }
 
+.task-tabs-list-container {
+  border-bottom: 0 !important;
+}
+
+.task-tabs-list {
+  border-bottom-color: #161b22 !important;
+}
+
 @media (max-height: 560px) {
   .home-main {
     display: flex;

@@ -9,6 +9,13 @@ type CommandSpec = {
   args: string[];
 };
 
+function parseSelectedPaths(stdout: string): string[] {
+  return stdout
+    .split(/\r?\n/)
+    .map((value) => value.replace(/\r$/, ''))
+    .filter(Boolean);
+}
+
 export function getPickDirectoryCommand(platform = os.platform()): CommandSpec {
   if (platform === 'darwin') {
     return {
@@ -39,12 +46,65 @@ export function getPickDirectoryCommand(platform = os.platform()): CommandSpec {
   };
 }
 
+export function getPickFilesCommand(platform = os.platform()): CommandSpec {
+  if (platform === 'darwin') {
+    return {
+      command: 'osascript',
+      args: [
+        '-e',
+        'set chosenFiles to choose file with prompt "Choose files to insert into terminal" with multiple selections allowed',
+        '-e',
+        'set output to ""',
+        '-e',
+        'repeat with chosenFile in chosenFiles',
+        '-e',
+        'set output to output & POSIX path of chosenFile & linefeed',
+        '-e',
+        'end repeat',
+        '-e',
+        'output',
+      ],
+    };
+  }
+
+  if (platform === 'win32') {
+    return {
+      command: 'powershell',
+      args: [
+        '-NoProfile',
+        '-Command',
+        'Add-Type -AssemblyName System.Windows.Forms; $dialog = New-Object System.Windows.Forms.OpenFileDialog; $dialog.Title = "Choose files to insert into terminal"; $dialog.Multiselect = $true; if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $dialog.FileNames | ForEach-Object { Write-Output $_ } }',
+      ],
+    };
+  }
+
+  return {
+    command: 'zenity',
+    args: ['--file-selection', '--multiple', '--separator=\n', '--title=Choose files to insert into terminal'],
+  };
+}
+
 export async function pickDirectory(): Promise<string | null> {
   const { command, args } = getPickDirectoryCommand();
   try {
     const { stdout } = await execFileAsync(command, args);
     const selectedPath = stdout.trim();
     return selectedPath || null;
+  } catch (error) {
+    const execError = error as NodeJS.ErrnoException & { code?: string | number };
+    if (String(execError.code) === '1') {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function pickFiles(): Promise<string[] | null> {
+  const { command, args } = getPickFilesCommand();
+  try {
+    const { stdout } = await execFileAsync(command, args);
+    const selectedPaths = parseSelectedPaths(stdout);
+    return selectedPaths.length > 0 ? selectedPaths : null;
   } catch (error) {
     const execError = error as NodeJS.ErrnoException & { code?: string | number };
     if (String(execError.code) === '1') {

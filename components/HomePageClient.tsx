@@ -6,6 +6,11 @@ import { Alert, Button, ButtonGroup, Card, Label, ListBox, Select, Separator, Sp
 import { CodeFork, FolderArrowRight, Play, Terminal } from '@gravity-ui/icons';
 import type { BranchOption, ProviderId, ReasoningEffort, TaskMode } from '../lib/types';
 import { getPreferredRepoPath } from '../lib/recent-repos';
+import {
+  browserSupportsAbsoluteFilePaths,
+  getDirectoryPathFromFiles,
+  requestInputSelection,
+} from '../lib/browser-file-paths';
 
 const REPO_PREFERENCES_STORAGE_KEY = 'beaver:repo-preferences';
 const LAST_SELECTED_REPO_STORAGE_KEY = 'beaver:last-selected-repo-path';
@@ -37,6 +42,7 @@ type AutoTheme = 'light' | 'dark';
 export function HomePageClient({ providers, recentRepoPaths: initialRecentRepoPaths }: HomePageClientProps) {
   const router = useRouter();
   const hasInitializedRepoSelection = useRef(false);
+  const directoryInputRef = useRef<HTMLInputElement | null>(null);
   const [theme, setTheme] = useState<AutoTheme>('light');
   const [isCompactViewport, setIsCompactViewport] = useState(false);
   const [repoPath, setRepoPath] = useState('');
@@ -325,21 +331,30 @@ export function HomePageClient({ providers, recentRepoPaths: initialRecentRepoPa
     setError(null);
 
     try {
-      const response = await fetch('/api/fs/pick-directory', {
-        method: 'POST',
-      });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.error || 'Failed to open the native folder picker.');
+      let selectedPath = '';
+      if (browserSupportsAbsoluteFilePaths()) {
+        const browserPickedPath = await requestInputSelection(directoryInputRef.current, getDirectoryPathFromFiles);
+        if (browserPickedPath === null) {
+          return;
+        }
+        selectedPath = browserPickedPath;
+      } else {
+        const response = await fetch('/api/fs/pick-directory', {
+          method: 'POST',
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || 'Failed to open the native folder picker.');
+        }
+        selectedPath = payload.path ?? '';
       }
 
-      if (!payload.path) {
+      if (!selectedPath) {
         return;
       }
-
       setBranches([]);
       setSelectedBranch('');
-      await loadBranches(payload.path);
+      await loadBranches(selectedPath);
     } catch (browseError) {
       setError(browseError instanceof Error ? browseError.message : 'Failed to browse for a folder.');
     } finally {
@@ -499,6 +514,15 @@ export function HomePageClient({ providers, recentRepoPaths: initialRecentRepoPa
       data-theme={theme}
       className="home-shell home-main min-h-screen px-4 py-6 transition-colors duration-200 sm:px-6"
     >
+      <input
+        ref={directoryInputRef}
+        type="file"
+        multiple
+        tabIndex={-1}
+        className="hidden"
+        aria-hidden="true"
+        {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
+      />
       <div className="home-frame mx-auto w-full max-w-5xl">
         <Card className="home-card home-root-card border border-default-200/70 backdrop-blur-xl" variant="default">
           <Card.Header className="home-header flex flex-col items-start gap-4 px-6 pb-2 pt-6 sm:flex-row sm:items-start sm:justify-between sm:px-8">

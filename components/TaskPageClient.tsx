@@ -3,8 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Alert, Button, Spinner, Tabs } from '@heroui/react';
-import { CircleStop, CircleXmark, Plus } from '@gravity-ui/icons';
+import { CircleStop, CircleXmark, FileArrowUp, Plus } from '@gravity-ui/icons';
 import type { TaskRecord, TerminalRecord } from '../lib/types';
+import {
+  browserSupportsAbsoluteFilePaths,
+  getAbsolutePathsFromFiles,
+  requestInputSelection,
+} from '../lib/browser-file-paths';
+import { formatPathsForTerminalInput } from '../lib/shell-path-format';
 
 type TerminalView = TerminalRecord & { url: string };
 
@@ -33,6 +39,8 @@ function getFolderName(filePath: string): string {
 export function TaskPageClient({ taskId }: TaskPageClientProps) {
   const router = useRouter();
   const clientIdRef = useRef<string>('');
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const terminalFrameRefs = useRef<Record<string, HTMLIFrameElement | null>>({});
   const [task, setTask] = useState<TaskRecord | null>(null);
   const [terminals, setTerminals] = useState<TerminalView[]>([]);
   const [activeTerminalId, setActiveTerminalId] = useState<string>('');
@@ -41,6 +49,7 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
   const [renamingTerminalId, setRenamingTerminalId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [addingTerminal, setAddingTerminal] = useState(false);
+  const [insertingFiles, setInsertingFiles] = useState(false);
   const [cleanupState, setCleanupState] = useState('Waiting for bootstrap...');
   const [error, setError] = useState<string | null>(null);
 
@@ -171,6 +180,56 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
     }
   }
 
+  async function handleInsertFiles() {
+    if (!activeTerminal) {
+      return;
+    }
+
+    setInsertingFiles(true);
+    setError(null);
+    try {
+      let paths: string[] = [];
+      if (browserSupportsAbsoluteFilePaths()) {
+        const browserPickedPaths = await requestInputSelection(fileInputRef.current, getAbsolutePathsFromFiles);
+        if (browserPickedPaths === null) {
+          return;
+        }
+        paths = browserPickedPaths;
+      } else {
+        const pickResponse = await fetch('/api/fs/pick-files', {
+          method: 'POST',
+        });
+        const pickPayload = (await pickResponse.json()) as { error?: string; paths?: string[] };
+        if (!pickResponse.ok) {
+          throw new Error(pickPayload.error || 'Failed to open file picker.');
+        }
+        paths = Array.isArray(pickPayload.paths)
+          ? pickPayload.paths.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+          : [];
+      }
+
+      if (paths.length === 0) {
+        return;
+      }
+
+      const activeFrame = terminalFrameRefs.current[activeTerminal.id];
+      if (!activeFrame?.contentWindow) {
+        throw new Error('Active terminal is not ready yet.');
+      }
+      activeFrame.contentWindow.postMessage(
+        {
+          type: 'beaver:insert-text',
+          text: `${formatPathsForTerminalInput(paths)} `,
+        },
+        new URL(activeTerminal.url).origin,
+      );
+    } catch (insertError) {
+      setError(insertError instanceof Error ? insertError.message : 'Failed to insert file paths.');
+    } finally {
+      setInsertingFiles(false);
+    }
+  }
+
   async function handleCloseTerminal(terminalId: string) {
     setError(null);
     try {
@@ -270,6 +329,14 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
 
   return (
     <main className="h-screen overflow-hidden bg-[#0b0f14] text-[#e5e7eb]">
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        tabIndex={-1}
+        className="hidden"
+        aria-hidden="true"
+      />
       <div className="flex h-full flex-col">
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {error ? (
@@ -302,9 +369,9 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
                 variant="secondary"
                 className="w-full shrink-0"
               >
-                <Tabs.ListContainer className="border-b border-white/10 bg-[#0b0f14] px-2">
+                <Tabs.ListContainer className="task-tabs-list-container bg-[#0b0f14] px-2">
                   <div className="flex items-center gap-1">
-                    <Tabs.List aria-label="Terminal sessions" className="min-w-0 flex-1">
+                    <Tabs.List aria-label="Terminal sessions" className="task-tabs-list min-w-0 flex-1">
                       {terminals.map((terminal, index) => (
                         <Tabs.Tab
                           key={terminal.id}
@@ -371,6 +438,16 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
                     <Button
                       variant="ghost"
                       size="sm"
+                      className="min-h-8 min-w-8 px-0 text-[#cbd5e1] hover:bg-white/10"
+                      onPress={() => void handleInsertFiles()}
+                      isDisabled={!task || !activeTerminal || insertingFiles}
+                      aria-label="Insert local file paths"
+                    >
+                      {insertingFiles ? <Spinner size="sm" /> : <FileArrowUp aria-hidden="true" className="h-4 w-4" />}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       className="min-h-8 min-w-8 px-0 text-lg text-[#cbd5e1] hover:bg-white/10"
                       onPress={() => void handleAddTerminal()}
                       isDisabled={!task || addingTerminal}
@@ -390,6 +467,9 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
                     aria-hidden={terminal.id === activeTerminal?.id ? undefined : true}
                   >
                     <iframe
+                      ref={(node) => {
+                        terminalFrameRefs.current[terminal.id] = node;
+                      }}
                       src={terminal.url}
                       title={terminal.title}
                       scrolling="no"
