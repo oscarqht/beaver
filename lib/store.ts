@@ -1,13 +1,20 @@
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { ensureDirectory, resolveBeverHomeDir } from './fs-utils';
 import type { BeverState, TaskRecord, TerminalRecord } from './types';
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __beaverStateUpdateChain: Promise<void> | undefined;
+}
 
 function createDefaultState(): BeverState {
   return {
     version: 1,
     tasks: {},
     terminals: {},
+    recentRepoPaths: [],
   };
 }
 
@@ -24,6 +31,7 @@ export async function readState(): Promise<BeverState> {
       version: 1,
       tasks: parsed.tasks ?? {},
       terminals: parsed.terminals ?? {},
+      recentRepoPaths: parsed.recentRepoPaths ?? [],
     };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -37,18 +45,36 @@ export async function writeState(state: BeverState): Promise<void> {
   const homeDir = resolveBeverHomeDir();
   await ensureDirectory(homeDir);
   const statePath = getStatePath();
-  const tempPath = `${statePath}.tmp`;
+  const tempPath = `${statePath}.${process.pid}.${randomUUID()}.tmp`;
   await fs.writeFile(tempPath, JSON.stringify(state, null, 2), 'utf8');
   await fs.rename(tempPath, statePath);
+}
+
+async function runStateUpdateExclusive<T>(operation: () => Promise<T>): Promise<T> {
+  const previous = global.__beaverStateUpdateChain ?? Promise.resolve();
+  let release!: () => void;
+  const next = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  global.__beaverStateUpdateChain = previous.catch(() => undefined).then(() => next);
+
+  await previous.catch(() => undefined);
+  try {
+    return await operation();
+  } finally {
+    release();
+  }
 }
 
 export async function updateState(
   updater: (state: BeverState) => void | BeverState,
 ): Promise<BeverState> {
-  const state = await readState();
-  const next = updater(state) ?? state;
-  await writeState(next);
-  return next;
+  return runStateUpdateExclusive(async () => {
+    const state = await readState();
+    const next = updater(state) ?? state;
+    await writeState(next);
+    return next;
+  });
 }
 
 export async function saveTask(task: TaskRecord): Promise<TaskRecord> {
@@ -92,4 +118,25 @@ export async function deleteTerminal(terminalId: string): Promise<void> {
   await updateState((state) => {
     delete state.terminals[terminalId];
   });
+}
+
+export async function getRecentRepoPaths(): Promise<string[]> {
+  const state = await readState();
+  return state.recentRepoPaths;
+}
+
+export async function rememberRecentRepoPath(repoPath: string): Promise<string[]> {
+  const normalizedPath = repoPath.trim();
+  if (!normalizedPath) {
+    return getRecentRepoPaths();
+  }
+
+  const state = await updateState((currentState) => {
+    currentState.recentRepoPaths = [
+      normalizedPath,
+      ...currentState.recentRepoPaths.filter((entry) => entry !== normalizedPath),
+    ].slice(0, 10);
+  });
+
+  return state.recentRepoPaths;
 }

@@ -6,10 +6,33 @@ import { expandUserPath, ensureDirectory } from './fs-utils';
 import type { BranchOption } from './types';
 
 const execFileAsync = promisify(execFile);
+const GIT_LOCK_RETRY_COUNT = 5;
+const GIT_LOCK_RETRY_DELAY_MS = 250;
+
+function isGitIndexLockError(error: unknown): boolean {
+  const stderr = (error as { stderr?: string })?.stderr ?? '';
+  const message = error instanceof Error ? error.message : String(error);
+  return /index\.lock/i.test(stderr) || /index\.lock/i.test(message);
+}
+
+async function sleep(milliseconds: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
 
 async function runGit(args: string[], cwd?: string): Promise<string> {
-  const result = await execFileAsync('git', args, cwd ? { cwd, encoding: 'utf8' } : { encoding: 'utf8' });
-  return result.stdout.trim();
+  let attempt = 0;
+  while (true) {
+    try {
+      const result = await execFileAsync('git', args, cwd ? { cwd, encoding: 'utf8' } : { encoding: 'utf8' });
+      return result.stdout.trim();
+    } catch (error) {
+      if (!isGitIndexLockError(error) || attempt >= GIT_LOCK_RETRY_COUNT - 1) {
+        throw error;
+      }
+      attempt += 1;
+      await sleep(GIT_LOCK_RETRY_DELAY_MS);
+    }
+  }
 }
 
 export async function resolveGitRepositoryPath(inputPath: string): Promise<string> {

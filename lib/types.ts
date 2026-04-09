@@ -51,6 +51,7 @@ export type BeverState = {
   version: 1;
   tasks: Record<string, TaskRecord>;
   terminals: Record<string, TerminalRecord>;
+  recentRepoPaths: string[];
 };
 
 export type BranchOption = {

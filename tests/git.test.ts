@@ -47,6 +47,20 @@ test('local checkout refuses dirty repositories', async () => {
   );
 });
 
+test('local checkout retries transient index.lock failures', async () => {
+  const repoPath = await createRepo();
+  const lockPath = path.join(repoPath, '.git', 'index.lock');
+  await fs.writeFile(lockPath, '', 'utf8');
+
+  setTimeout(() => {
+    void fs.rm(lockPath, { force: true });
+  }, 150);
+
+  await checkoutBranch(repoPath, 'feature');
+  const currentBranch = await execFileAsync('git', ['branch', '--show-current'], { cwd: repoPath });
+  assert.equal(currentBranch.stdout.trim(), 'feature');
+});
+
 test('creates and removes worktrees', async () => {
   const repoPath = await createRepo();
   const worktree = await createWorktree(repoPath, 'task-123', 'main');

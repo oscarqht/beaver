@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { listLocalBranches, resolveGitRepositoryPath } from '../../../../lib/git';
+import { rememberRecentRepoPath } from '../../../../lib/store';
 
 export const runtime = 'nodejs';
 
@@ -12,10 +13,12 @@ export async function GET(request: NextRequest) {
   try {
     const resolvedPath = await resolveGitRepositoryPath(repoPath);
     const result = await listLocalBranches(resolvedPath);
+    const recentRepoPaths = await rememberRecentRepoPath(resolvedPath);
     return NextResponse.json({
       path: resolvedPath,
       currentBranch: result.currentBranch,
       branches: result.branches,
+      recentRepoPaths,
     });
   } catch (error) {
     return NextResponse.json(

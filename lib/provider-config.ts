@@ -1,3 +1,5 @@
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import type { ProviderConfig, ProviderId, ReasoningEffort } from './types';
 
 const GPT5_REASONING: ReasoningEffort[] = ['low', 'medium', 'high'];
@@ -5,6 +7,26 @@ const CODEX_REASONING: ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh'];
 
 function quoteShellValue(value: string): string {
   return JSON.stringify(value);
+}
+
+function resolveCliBinary(configuredBinary: string): string {
+  const trimmedBinary = configuredBinary.trim();
+  if (!trimmedBinary) {
+    return trimmedBinary;
+  }
+  if (path.isAbsolute(trimmedBinary)) {
+    return trimmedBinary;
+  }
+
+  const result = spawnSync('which', [trimmedBinary], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  if (result.status === 0 && result.stdout.trim()) {
+    return result.stdout.trim();
+  }
+
+  return trimmedBinary;
 }
 
 export const providerCatalog: ProviderConfig[] = [
@@ -38,7 +60,7 @@ export const providerCatalog: ProviderConfig[] = [
       },
     ],
     buildCommand({ model, reasoningEffort }) {
-      const binary = process.env.BEVER_CODEX_BIN?.trim() || 'codex';
+      const binary = resolveCliBinary(process.env.BEVER_CODEX_BIN?.trim() || 'codex');
       const args = [
         '-c',
         'approval_policy="never"',
@@ -51,7 +73,7 @@ export const providerCatalog: ProviderConfig[] = [
       if (reasoningEffort?.trim()) {
         args.push('-c', `model_reasoning_effort=${quoteShellValue(reasoningEffort.trim())}`);
       }
-      return [binary, ...args].join(' ');
+      return [quoteShellValue(binary), ...args].join(' ');
     },
   },
   {
@@ -80,12 +102,12 @@ export const providerCatalog: ProviderConfig[] = [
       },
     ],
     buildCommand({ model }) {
-      const binary = process.env.BEVER_GEMINI_BIN?.trim() || 'gemini';
+      const binary = resolveCliBinary(process.env.BEVER_GEMINI_BIN?.trim() || 'gemini');
       const args = ['--yolo'];
       if (model.trim()) {
         args.push('--model', model.trim());
       }
-      return [binary, ...args].join(' ');
+      return [quoteShellValue(binary), ...args].join(' ');
     },
   },
   {
@@ -114,9 +136,9 @@ export const providerCatalog: ProviderConfig[] = [
       },
     ],
     buildCommand({ model }) {
-      const binary = process.env.BEVER_CURSOR_BIN?.trim() || 'cursor-agent';
+      const binary = resolveCliBinary(process.env.BEVER_CURSOR_BIN?.trim() || 'cursor-agent');
       const args = model.trim() ? ['--model', model.trim()] : [];
-      return [binary, ...args].join(' ');
+      return [quoteShellValue(binary), ...args].join(' ');
     },
   },
 ];

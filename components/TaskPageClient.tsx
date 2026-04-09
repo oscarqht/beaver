@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Alert, Button, Spinner, Tabs } from '@heroui/react';
 import type { TaskRecord, TerminalRecord } from '../lib/types';
 
 type TerminalView = TerminalRecord & { url: string };
@@ -14,6 +15,19 @@ type BootstrapPayload = {
   task: TaskRecord;
   terminals: TerminalView[];
 };
+
+function getTaskClientStorageKey(taskId: string) {
+  return `beaver:task-client:${taskId}`;
+}
+
+function getFolderName(filePath: string): string {
+  const normalizedPath = filePath.trim().replace(/[\\/]+$/, '');
+  if (!normalizedPath) {
+    return '';
+  }
+  const segments = normalizedPath.split(/[\\/]/).filter(Boolean);
+  return segments.at(-1) ?? normalizedPath;
+}
 
 export function TaskPageClient({ taskId }: TaskPageClientProps) {
   const router = useRouter();
@@ -30,6 +44,7 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
     () => terminals.find((terminal) => terminal.id === activeTerminalId) ?? terminals[0] ?? null,
     [activeTerminalId, terminals],
   );
+  const folderName = useMemo(() => (task ? getFolderName(task.sourcePath) : ''), [task]);
 
   const runCleanup = useCallback(
     async (keepalive = false) => {
@@ -58,7 +73,11 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
   );
 
   useEffect(() => {
-    clientIdRef.current = crypto.randomUUID();
+    const storageKey = getTaskClientStorageKey(taskId);
+    const existingClientId = window.sessionStorage.getItem(storageKey)?.trim();
+    const clientId = existingClientId || crypto.randomUUID();
+    clientIdRef.current = clientId;
+    window.sessionStorage.setItem(storageKey, clientId);
 
     let cancelled = false;
     const bootstrap = async () => {
@@ -80,6 +99,10 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
         }
         if (cancelled) return;
 
+        if (payload.task.ownerClientId) {
+          clientIdRef.current = payload.task.ownerClientId;
+          window.sessionStorage.setItem(storageKey, payload.task.ownerClientId);
+        }
         setTask(payload.task);
         setTerminals(payload.terminals);
         setActiveTerminalId(payload.terminals[0]?.id ?? '');
@@ -181,81 +204,169 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
 
   async function handleLeaveNow() {
     await runCleanup(false);
+    window.sessionStorage.removeItem(getTaskClientStorageKey(taskId));
     router.push('/');
   }
 
   return (
-    <main className="shell">
-      <div className="container task-layout">
-        <section className="card task-topbar">
-          <div className="task-heading">
-            <h1>Task {taskId.slice(0, 8)}</h1>
-            <p>
-              {task
-                ? 'Shared ttyd stays alive, while this browser tab owns the task terminals and cleanup.'
-                : 'Bootstrapping task workspace and terminal sessions.'}
-            </p>
-          </div>
-
-          <div className="task-meta">
-            {task ? <span className="pill">{task.sourcePath}</span> : null}
-            {task ? <span className="pill">mode: {task.mode}</span> : null}
-            {task ? <span className="pill">branch: {task.selectedBranch}</span> : null}
-            {task ? <span className="pill">provider: {task.provider}</span> : null}
-            {task ? <span className="pill">model: {task.model}</span> : null}
-          </div>
-
-          {error ? <div className="status error">{error}</div> : null}
-          {!error ? <div className="status">{cleanupState}</div> : null}
-
-          <div className="action-row">
-            <button className="button" type="button" onClick={() => void handleAddTerminal()} disabled={!task || addingTerminal}>
-              {addingTerminal ? 'Opening...' : 'New terminal'}
-            </button>
-            <button className="button ghost" type="button" onClick={() => void handleLeaveNow()} disabled={!task}>
-              End task now
-            </button>
-          </div>
-        </section>
-
-        <section className="card terminal-shell">
-          <div className="tab-row">
-            {terminals.map((terminal) => (
-              <button
-                key={terminal.id}
-                className={`tab ${activeTerminal?.id === terminal.id ? 'active' : ''}`}
-                type="button"
-                onClick={() => setActiveTerminalId(terminal.id)}
-              >
-                <span>{terminal.title}</span>
-                {terminal.closable ? (
-                  <span
-                    className="tab-close"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void handleCloseTerminal(terminal.id);
-                    }}
-                  >
-                    ×
-                  </span>
-                ) : null}
-              </button>
-            ))}
-          </div>
-
+    <main className="h-screen overflow-hidden bg-[#0b0f14] text-[#e5e7eb]">
+      <div className="flex h-full flex-col">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {loading ? (
-            <div className="empty-state">Starting ttyd and tmux sessions...</div>
-          ) : activeTerminal ? (
-            <iframe
-              key={activeTerminal.id}
-              className="terminal-frame"
-              src={activeTerminal.url}
-              title={activeTerminal.title}
-            />
+            <div className="grid flex-1 place-items-center px-6 py-12 text-sm text-[#94a3b8]">
+              <div className="flex items-center gap-3">
+                <Spinner size="sm" />
+                <span>Starting ttyd and tmux sessions...</span>
+              </div>
+            </div>
+          ) : terminals.length === 0 ? (
+            <div className="grid flex-1 place-items-center px-6 py-12 text-sm text-[#94a3b8]">
+              No terminal available.
+            </div>
           ) : (
-            <div className="empty-state">No terminal available.</div>
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              <Tabs
+                selectedKey={activeTerminal?.id}
+                onSelectionChange={(key) => setActiveTerminalId(String(key))}
+                variant="secondary"
+                className="w-full shrink-0"
+              >
+                <Tabs.ListContainer className="border-b border-white/10 bg-[#0b0f14] px-2">
+                  <div className="flex items-center gap-1">
+                    <Tabs.List aria-label="Terminal sessions" className="min-w-0 flex-1">
+                      {terminals.map((terminal, index) => (
+                        <Tabs.Tab
+                          key={terminal.id}
+                          id={terminal.id}
+                          className="min-h-8 rounded-none border-b-2 border-transparent px-2.5 text-xs text-[#94a3b8] transition data-[selected=true]:border-[#3b82f6] data-[selected=true]:text-white"
+                        >
+                          {index > 0 ? <Tabs.Separator /> : null}
+                          <span className="flex items-center gap-2">
+                            <span>{terminal.title}</span>
+                            {terminal.closable ? (
+                              <button
+                                type="button"
+                                aria-label={`Close ${terminal.title}`}
+                                className="grid h-5 w-5 place-items-center rounded-full text-sm leading-none text-[#64748b] transition hover:bg-white/10 hover:text-white"
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  void handleCloseTerminal(terminal.id);
+                                }}
+                              >
+                                ×
+                              </button>
+                            ) : null}
+                          </span>
+                        </Tabs.Tab>
+                      ))}
+                    </Tabs.List>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="min-h-8 min-w-8 px-0 text-lg text-[#cbd5e1] hover:bg-white/10"
+                      onPress={() => void handleAddTerminal()}
+                      isDisabled={!task || addingTerminal}
+                      aria-label="Open new terminal"
+                    >
+                      {addingTerminal ? <Spinner size="sm" /> : '+'}
+                    </Button>
+                  </div>
+                </Tabs.ListContainer>
+              </Tabs>
+
+              {error ? (
+                <div className="border-b border-white/10 bg-[#0f172a] px-2 py-2">
+                  <Alert status="danger">
+                    <Alert.Content>
+                      <Alert.Title>Task error</Alert.Title>
+                      <Alert.Description>{error}</Alert.Description>
+                    </Alert.Content>
+                  </Alert>
+                </div>
+              ) : null}
+
+              <div className="relative h-0 min-h-0 flex-1 overflow-hidden bg-[#0b0f14]">
+                {terminals.map((terminal) => (
+                  <div
+                    key={terminal.id}
+                    className={terminal.id === activeTerminal?.id ? 'absolute inset-0 block' : 'hidden'}
+                    aria-hidden={terminal.id === activeTerminal?.id ? undefined : true}
+                  >
+                    <iframe
+                      src={terminal.url}
+                      title={terminal.title}
+                      scrolling="no"
+                      className="absolute inset-0 block h-full w-full border-0 bg-[#0b0f14]"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
-        </section>
+        </div>
+
+        <div className="shrink-0 border-t border-white/10 bg-[#0f172a] max-[599px]:hidden">
+          <div className="flex items-center justify-between gap-2 px-3 py-1.5">
+            <div className="hidden min-w-0 flex-1 items-center gap-x-2 gap-y-1 overflow-hidden text-[10px] leading-4 text-[#94a3b8] min-[600px]:flex">
+              {task ? (
+                <>
+                  <span
+                    className="max-w-full truncate min-[1200px]:hidden"
+                    title={task.sourcePath}
+                  >
+                    {folderName}
+                  </span>
+                  <span
+                    className="max-w-full truncate max-[1199px]:hidden"
+                    title={task.sourcePath}
+                  >
+                    {task.sourcePath}
+                  </span>
+                  <span className="truncate" title={`mode: ${task.mode}`}>
+                    {`mode: ${task.mode}`}
+                  </span>
+                  <span className="truncate" title={`branch: ${task.selectedBranch}`}>
+                    {`branch: ${task.selectedBranch}`}
+                  </span>
+                  <span className="truncate" title={`provider: ${task.provider}`}>
+                    {`provider: ${task.provider}`}
+                  </span>
+                  <span className="truncate max-[999px]:hidden" title={`model: ${task.model}`}>
+                    {`model: ${task.model}`}
+                  </span>
+                </>
+              ) : null}
+              {!error && cleanupState ? (
+                <span className="truncate text-[#64748b] max-[999px]:hidden" title={cleanupState}>
+                  {cleanupState}
+                </span>
+              ) : null}
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 min-w-0 px-2 text-[11px] text-[#cbd5e1] hover:bg-white/10"
+              onPress={() => void handleLeaveNow()}
+              isDisabled={!task}
+            >
+              End task
+            </Button>
+          </div>
+        </div>
+
+        <Button
+          variant="ghost"
+          size="sm"
+          className="fixed bottom-3 right-3 z-20 hidden h-11 w-11 min-w-0 rounded-full border border-white/10 bg-[#0f172a]/95 px-0 text-[#cbd5e1] shadow-lg shadow-black/30 hover:bg-white/10 max-[599px]:inline-flex"
+          onPress={() => void handleLeaveNow()}
+          isDisabled={!task}
+          aria-label="End task"
+        >
+          <svg aria-hidden="true" viewBox="0 0 16 16" className="h-4 w-4 fill-current">
+            <rect x="3" y="3" width="10" height="10" rx="1.5" />
+          </svg>
+        </Button>
       </div>
     </main>
   );

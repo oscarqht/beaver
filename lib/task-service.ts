@@ -6,6 +6,7 @@ import {
   deleteTerminal,
   getTask,
   getTaskTerminals,
+  rememberRecentRepoPath,
   readState,
   saveTask,
   saveTerminal,
@@ -22,6 +23,11 @@ import type {
 
 const HEARTBEAT_TIMEOUT_MS = 30_000;
 
+declare global {
+  // eslint-disable-next-line no-var
+  var __beaverTaskBootstrapChains: Map<string, Promise<void>> | undefined;
+}
+
 type CreateTaskInput = {
   sourcePath: string;
   mode: TaskMode;
@@ -36,6 +42,43 @@ export function serializeTerminal(terminal: TerminalRecord) {
     ...terminal,
     url: buildTerminalUrl(terminal.tmuxSessionName),
   };
+}
+
+export function splitMainTerminalDuplicates(terminals: TerminalRecord[]) {
+  const sorted = [...terminals].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  const mainTerminals = sorted.filter((terminal) => terminal.role === 'main');
+  const primaryMainTerminal = mainTerminals[0] ?? null;
+  const duplicateMainTerminals = mainTerminals.slice(1);
+
+  return {
+    primaryMainTerminal,
+    duplicateMainTerminals,
+    normalizedTerminals: primaryMainTerminal
+      ? sorted.filter((terminal) => terminal.role !== 'main' || terminal.id === primaryMainTerminal.id)
+      : sorted,
+  };
+}
+
+async function runBootstrapExclusive<T>(taskId: string, operation: () => Promise<T>): Promise<T> {
+  const chains = global.__beaverTaskBootstrapChains ?? new Map<string, Promise<void>>();
+  global.__beaverTaskBootstrapChains = chains;
+
+  const previous = chains.get(taskId) ?? Promise.resolve();
+  let release!: () => void;
+  const next = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  chains.set(taskId, previous.catch(() => undefined).then(() => next));
+
+  await previous.catch(() => undefined);
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (chains.get(taskId) === next) {
+      chains.delete(taskId);
+    }
+  }
 }
 
 function isTaskStale(task: TaskRecord): boolean {
@@ -75,6 +118,7 @@ export async function createTask(input: CreateTaskInput): Promise<TaskRecord> {
     createdAt: new Date().toISOString(),
   };
 
+  await rememberRecentRepoPath(sourcePath);
   return await saveTask(task);
 }
 
@@ -113,65 +157,82 @@ function assertOwner(task: TaskRecord, clientId: string, allowStale = false): vo
 }
 
 export async function bootstrapTask(taskId: string, clientId: string) {
-  await sweepStaleTasks();
+  return runBootstrapExclusive(taskId, async () => {
+    await sweepStaleTasks();
 
-  const task = await getTask(taskId);
-  if (!task) {
-    throw new Error('Task not found.');
-  }
-
-  if (task.ownerClientId && task.ownerClientId !== clientId && !isTaskStale(task)) {
-    throw new Error('Task is already owned by another browser tab.');
-  }
-
-  let nextTask = task;
-  const terminals = await getTaskTerminals(taskId);
-  if (!task.workspacePath) {
-    if (task.mode === 'local') {
-      await checkoutBranch(task.sourcePath, task.selectedBranch);
-      nextTask = {
-        ...task,
-        workspacePath: task.sourcePath,
-      };
-    } else {
-      const worktree = await createWorktree(task.sourcePath, task.id, task.selectedBranch);
-      nextTask = {
-        ...task,
-        workspacePath: worktree.workspacePath,
-        worktreeBranch: worktree.worktreeBranch,
-      };
+    const task = await getTask(taskId);
+    if (!task) {
+      throw new Error('Task not found.');
     }
-  }
 
-  nextTask = {
-    ...nextTask,
-    ownerClientId: clientId,
-    lastHeartbeatAt: new Date().toISOString(),
-    status: 'active',
-  };
-  await saveTask(nextTask);
+    if (task.ownerClientId && task.ownerClientId !== clientId && !isTaskStale(task)) {
+      throw new Error('Task is already owned by another browser tab.');
+    }
 
-  let nextTerminals = terminals;
-  if (nextTerminals.length === 0) {
-    const provider = getProviderConfig(nextTask.provider);
-    const mainTerminal = await createTerminalSession({
+    let nextTask = task;
+    let nextTerminals = await getTaskTerminals(taskId);
+    const {
+      primaryMainTerminal,
+      duplicateMainTerminals,
+      normalizedTerminals,
+    } = splitMainTerminalDuplicates(nextTerminals);
+
+    if (duplicateMainTerminals.length > 0) {
+      for (const duplicateTerminal of duplicateMainTerminals) {
+        await killTmuxSession(duplicateTerminal.tmuxSessionName);
+        await deleteTerminal(duplicateTerminal.id);
+      }
+      nextTerminals = normalizedTerminals;
+    }
+
+    if (!task.workspacePath) {
+      if (task.mode === 'local') {
+        await checkoutBranch(task.sourcePath, task.selectedBranch);
+        nextTask = {
+          ...task,
+          workspacePath: task.sourcePath,
+        };
+      } else {
+        const worktree = await createWorktree(task.sourcePath, task.id, task.selectedBranch);
+        nextTask = {
+          ...task,
+          workspacePath: worktree.workspacePath,
+          worktreeBranch: worktree.worktreeBranch,
+        };
+      }
+    }
+
+    nextTask = {
+      ...nextTask,
+      ownerClientId: clientId,
+      lastHeartbeatAt: new Date().toISOString(),
+      status: 'active',
+    };
+    await saveTask(nextTask);
+
+    if (!primaryMainTerminal) {
+      const provider = getProviderConfig(nextTask.provider);
+      const mainTerminal = await createTerminalSession({
+        task: nextTask,
+        title: `${provider.label} main`,
+        role: 'main',
+        closable: false,
+        command: provider.buildCommand({
+          model: nextTask.model,
+          reasoningEffort: nextTask.reasoningEffort,
+        }),
+      });
+      await saveTerminal(mainTerminal);
+      nextTerminals = [...nextTerminals, mainTerminal].sort((left, right) =>
+        left.createdAt.localeCompare(right.createdAt),
+      );
+    }
+
+    return {
       task: nextTask,
-      title: `${provider.label} main`,
-      role: 'main',
-      closable: false,
-      command: provider.buildCommand({
-        model: nextTask.model,
-        reasoningEffort: nextTask.reasoningEffort,
-      }),
-    });
-    await saveTerminal(mainTerminal);
-    nextTerminals = [mainTerminal];
-  }
-
-  return {
-    task: nextTask,
-    terminals: nextTerminals.map(serializeTerminal),
-  };
+      terminals: nextTerminals.map(serializeTerminal),
+    };
+  });
 }
 
 export async function createExtraTerminal(taskId: string, clientId: string) {
