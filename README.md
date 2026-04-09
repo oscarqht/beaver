@@ -12,7 +12,7 @@ The app is built with Next.js and stores its own state on disk, so it works as a
 - Exposes terminals in the browser through `ttyd`.
 - Lets you open extra shell tabs for the same task.
 - Persists recent repositories and task state in `~/.bever` by default.
-- Reclaims abandoned tasks automatically after heartbeat timeout.
+- Keeps tasks running until you end them manually.
 
 ## Supported Providers
 
@@ -106,9 +106,9 @@ Use this when you want task isolation and easy cleanup.
 
 ## Runtime Behavior
 
-- Each task is claimed by a single browser tab.
+- Each task is claimed by a single browser tab while that tab keeps heartbeating.
 - The task page sends a heartbeat every 15 seconds.
-- If a task stops heartbeating for 30 seconds, Beaver treats it as stale and cleans it up.
+- If a task stops heartbeating for 30 seconds, Beaver only releases browser ownership so the running task can be reconnected later.
 - The main terminal tab cannot be closed.
 - Extra shell tabs can be created, renamed, and closed.
 

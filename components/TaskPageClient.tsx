@@ -110,7 +110,9 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
         setTask(payload.task);
         setTerminals(payload.terminals);
         setActiveTerminalId(payload.terminals[0]?.id ?? '');
-        setCleanupState('Task is active. Use End task to stop it. Abandoned tasks are cleaned up after timeout.');
+        setCleanupState(
+          'Task is active. Use End task to stop it manually. If browser ownership goes stale, reopening reconnects to the running task.',
+        );
       } catch (bootstrapError) {
         if (cancelled) return;
         setError(bootstrapError instanceof Error ? bootstrapError.message : 'Failed to bootstrap task.');

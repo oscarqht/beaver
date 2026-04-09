@@ -127,12 +127,13 @@ export async function getTaskDetails(taskId: string) {
   const task = await getTask(taskId);
   if (!task) return null;
   const terminals = await getTaskTerminals(taskId);
+  const stale = isTaskStale(task);
   return {
     task,
     terminals: terminals.map(serializeTerminal),
     ownership: {
-      claimed: Boolean(task.ownerClientId),
-      stale: isTaskStale(task),
+      claimed: Boolean(task.ownerClientId) && !stale,
+      stale,
     },
   };
 }
@@ -143,14 +144,16 @@ export async function listTasks() {
 }
 
 export async function sweepStaleTasks(): Promise<void> {
-  const state = await readState();
-  const staleTaskIds = Object.values(state.tasks)
-    .filter(isTaskStale)
-    .map((task) => task.id);
+  await updateState((state) => {
+    for (const task of Object.values(state.tasks)) {
+      if (!isTaskStale(task)) {
+        continue;
+      }
 
-  for (const taskId of staleTaskIds) {
-    await cleanupTask(taskId, { ignoreOwner: true });
-  }
+      task.ownerClientId = null;
+      task.lastHeartbeatAt = null;
+    }
+  });
 }
 
 function assertOwner(task: TaskRecord, clientId: string, allowStale = false): void {
@@ -242,7 +245,6 @@ export async function bootstrapTask(taskId: string, clientId: string) {
 }
 
 export async function createExtraTerminal(taskId: string, clientId: string) {
-  await sweepStaleTasks();
   const task = await getTask(taskId);
   if (!task) throw new Error('Task not found.');
   assertOwner(task, clientId);
@@ -303,7 +305,6 @@ export async function renameTerminal(
 }
 
 export async function refreshHeartbeat(taskId: string, clientId: string) {
-  await sweepStaleTasks();
   const task = await getTask(taskId);
   if (!task) throw new Error('Task not found.');
   assertOwner(task, clientId, true);

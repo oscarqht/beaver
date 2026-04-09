@@ -3,7 +3,14 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { deleteAllTasks, deleteTask, listTasks, renameTerminal, splitMainTerminalDuplicates } from '../lib/task-service';
+import {
+  deleteAllTasks,
+  deleteTask,
+  listTasks,
+  renameTerminal,
+  splitMainTerminalDuplicates,
+  sweepStaleTasks,
+} from '../lib/task-service';
 import { readState, saveTask, saveTerminal } from '../lib/store';
 import type { TaskRecord, TerminalRecord } from '../lib/types';
 
@@ -166,4 +173,33 @@ test('deleteAllTasks removes every pending task', async () => {
 
   assert.deepEqual(deletedTaskIds, ['task-2', 'task-1']);
   assert.deepEqual(state.tasks, {});
+});
+
+test('sweepStaleTasks releases stale ownership without deleting the task', async () => {
+  const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'bever-sweep-stale-'));
+  process.env.BEVER_HOME_DIR = tempHome;
+
+  const task: TaskRecord = {
+    id: 'task-stale',
+    sourcePath: '/tmp/repo-stale',
+    workspacePath: '/tmp/repo-stale',
+    mode: 'local',
+    provider: 'codex',
+    model: 'gpt-5.4',
+    reasoningEffort: 'low',
+    selectedBranch: 'main',
+    worktreeBranch: null,
+    status: 'active',
+    ownerClientId: 'client-stale',
+    lastHeartbeatAt: '2026-04-09T00:00:00.000Z',
+    createdAt: '2026-04-09T00:00:00.000Z',
+  };
+
+  await saveTask(task);
+  await sweepStaleTasks();
+
+  const state = await readState();
+  assert.equal(state.tasks[task.id]?.id, task.id);
+  assert.equal(state.tasks[task.id]?.ownerClientId, null);
+  assert.equal(state.tasks[task.id]?.lastHeartbeatAt, null);
 });
