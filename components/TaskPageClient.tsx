@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Alert, Button, Spinner, Tabs } from '@heroui/react';
+import { CircleStop, CircleXmark, Plus } from '@gravity-ui/icons';
 import type { TaskRecord, TerminalRecord } from '../lib/types';
 
 type TerminalView = TerminalRecord & { url: string };
@@ -254,7 +255,7 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
                                   void handleCloseTerminal(terminal.id);
                                 }}
                               >
-                                ×
+                                <CircleXmark aria-hidden="true" className="h-3.5 w-3.5" />
                               </button>
                             ) : null}
                           </span>
@@ -269,7 +270,7 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
                       isDisabled={!task || addingTerminal}
                       aria-label="Open new terminal"
                     >
-                      {addingTerminal ? <Spinner size="sm" /> : '+'}
+                      {addingTerminal ? <Spinner size="sm" /> : <Plus aria-hidden="true" className="h-4 w-4" />}
                     </Button>
                   </div>
                 </Tabs.ListContainer>
@@ -350,7 +351,10 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
               onPress={() => void handleLeaveNow()}
               isDisabled={!task}
             >
-              End task
+              <span className="flex items-center gap-1.5">
+                <CircleStop aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+                <span>End task</span>
+              </span>
             </Button>
           </div>
         </div>
@@ -363,9 +367,7 @@ export function TaskPageClient({ taskId }: TaskPageClientProps) {
           isDisabled={!task}
           aria-label="End task"
         >
-          <svg aria-hidden="true" viewBox="0 0 16 16" className="h-4 w-4 fill-current">
-            <rect x="3" y="3" width="10" height="10" rx="1.5" />
-          </svg>
+          <CircleStop aria-hidden="true" className="h-4 w-4" />
         </Button>
       </div>
     </main>
