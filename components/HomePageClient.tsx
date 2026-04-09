@@ -5,9 +5,10 @@ import { useRouter } from 'next/navigation';
 import { Alert, Button, ButtonGroup, Card, Label, ListBox, Select, Separator, Spinner, Tabs } from '@heroui/react';
 import { CodeFork, FolderArrowRight, Play, Terminal } from '@gravity-ui/icons';
 import type { BranchOption, ProviderId, ReasoningEffort, TaskMode } from '../lib/types';
-import { getMostRecentRepoPath } from '../lib/recent-repos';
+import { getPreferredRepoPath } from '../lib/recent-repos';
 
 const REPO_PREFERENCES_STORAGE_KEY = 'beaver:repo-preferences';
+const LAST_SELECTED_REPO_STORAGE_KEY = 'beaver:last-selected-repo-path';
 
 type StoredRepoPreferences = {
   providerId: ProviderId;
@@ -204,6 +205,28 @@ export function HomePageClient({ providers, recentRepoPaths: initialRecentRepoPa
     }
   }
 
+  function readLastSelectedRepoPath() {
+    if (typeof window === 'undefined') return '';
+
+    try {
+      return window.localStorage.getItem(LAST_SELECTED_REPO_STORAGE_KEY)?.trim() ?? '';
+    } catch {
+      return '';
+    }
+  }
+
+  function writeLastSelectedRepoPath(repoFullPath: string) {
+    if (typeof window === 'undefined') return;
+    const normalizedPath = repoFullPath.trim();
+    if (!normalizedPath) return;
+
+    try {
+      window.localStorage.setItem(LAST_SELECTED_REPO_STORAGE_KEY, normalizedPath);
+    } catch {
+      // Ignore localStorage failures and keep the UI functional.
+    }
+  }
+
   function applyRepoPreferences(repoFullPath: string) {
     const storedPreferences = readStoredRepoPreferences(repoFullPath);
     const fallbackProvider = providers[0];
@@ -257,12 +280,13 @@ export function HomePageClient({ providers, recentRepoPaths: initialRecentRepoPa
     }
     hasInitializedRepoSelection.current = true;
 
-    const lastSelectedRepoPath = getMostRecentRepoPath(initialRecentRepoPaths);
+    const lastSelectedRepoPath = getPreferredRepoPath(initialRecentRepoPaths, readLastSelectedRepoPath());
     if (!lastSelectedRepoPath) {
       return;
     }
 
     setRepoPath(lastSelectedRepoPath);
+    writeLastSelectedRepoPath(lastSelectedRepoPath);
     applyRepoPreferences(lastSelectedRepoPath);
     void loadBranches(lastSelectedRepoPath);
   }, [initialRecentRepoPaths]);
@@ -281,6 +305,7 @@ export function HomePageClient({ providers, recentRepoPaths: initialRecentRepoPa
       }
 
       setRepoPath(payload.path);
+      writeLastSelectedRepoPath(payload.path);
       applyRepoPreferences(payload.path);
       const nextBranches = payload.branches ?? [];
       setBranches(nextBranches);
@@ -506,6 +531,7 @@ export function HomePageClient({ providers, recentRepoPaths: initialRecentRepoPa
                         onSelectionChange={(key) => {
                           const nextRepoPath = String(key);
                           setRepoPath(nextRepoPath);
+                          writeLastSelectedRepoPath(nextRepoPath);
                           applyRepoPreferences(nextRepoPath);
                           setBranches([]);
                           setSelectedBranch('');
