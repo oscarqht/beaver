@@ -56,7 +56,7 @@ Start the dev server:
 npm run dev
 ```
 
-Then open [http://localhost:3000](http://localhost:3000).
+Then open [http://localhost:3200](http://localhost:3200).
 
 Useful scripts:
 
